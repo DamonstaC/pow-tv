@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">POW TV</string>
+    <string name="content_search_channels">Search channels\u2026</string>
+    <string name="content_search_movies">Search movies…</string>
+    <string name="content_search_series">Search series…</string>
+    <string name="pow_about_title">POW TV downloads and updates</string>
+    <string name="pow_release_address" translatable="false">github.com/DamonstaC/pow-tv</string>
+    <string name="pow_about_attribution">Based on OwnTV. Licensed under GPLv3. Original project and contributors credited below.</string>
+</resources>

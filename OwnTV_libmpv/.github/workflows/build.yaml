@@ -1,0 +1,110 @@
+name: Build
+
+# Every push and pull request builds the full native stack and checks the build contract
+# (tools/inspect_aar.py). publish.yaml and monthly-update.yaml call this same workflow, so a
+# published or proposed AAR is held to exactly the same checks.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to build (default: the triggering ref)"
+        type: string
+        default: ""
+      publish-version:
+        description: "When set (YYYY.MM.N), publish the AAR to OwnTV's public Maven repository under this version"
+        type: string
+        default: ""
+
+concurrency:
+  # Named after this file, not github.workflow: a called workflow reports the caller's name.
+  group: build-${{ inputs.ref || github.ref }}-${{ inputs.publish-version }}
+  cancel-in-progress: ${{ inputs.publish-version == '' }}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Symlink SDK
+        working-directory: ./buildscripts
+        run: |
+          mkdir sdk
+          ln -s ${ANDROID_HOME} ./sdk/android-sdk-linux
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf pkgconf libtool ninja-build python3-pip python3-jinja2 gperf nasm
+          sudo pip3 install --break-system-packages meson pyelftools
+
+      - name: Download dependencies
+        working-directory: ./buildscripts
+        env:
+          IN_CI: 1
+        run: ./download.sh
+
+      - name: Apply patches
+        working-directory: ./buildscripts
+        run: ./patch.sh
+
+      - name: Build
+        working-directory: ./buildscripts
+        run: ./build.sh
+
+      - name: Check the build contract
+        run: python3 tools/inspect_aar.py libmpv/build/outputs/aar/libmpv-release.aar | tee contract.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: libmpv-release
+          path: |
+            libmpv/build/outputs/aar/libmpv-release.aar
+            contract.txt
+
+      # The same .so files before stripping, one zip per ABI, attached to the GitHub Release
+      # (publish.yaml). Matched by build-id, they turn a native crash stack into function names.
+      - name: Collect unstripped native libraries
+        if: ${{ inputs.publish-version != '' }}
+        run: |
+          libs=libmpv/build/intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib
+          for abi in armeabi-v7a arm64-v8a x86_64; do
+            (cd "$libs/$abi" && zip -q -9 "$GITHUB_WORKSPACE/symbols-$abi.zip" *.so)
+          done
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ inputs.publish-version != '' }}
+        with:
+          name: libmpv-symbols
+          path: symbols-*.zip
+
+      # Into OwnTV's public Maven repository (the gh-pages branch of OwnTV_Core, served at
+      # https://ahxn00.github.io/OwnTV_Core/maven). CORE_BUMP_TOKEN can write to OwnTV_Core; the
+      # built-in token cannot. Keeps the newest 12 versions (~35 MB each; Pages sites cap at 1 GB).
+      - name: Publish to the OwnTV Maven repository
+        if: ${{ inputs.publish-version != '' }}
+        env:
+          PAGES_TOKEN: ${{ secrets.CORE_BUMP_TOKEN }}
+        run: |
+          ./gradlew :libmpv:publishReleasePublicationToStagingRepository -PlibVersion=${{ inputs.publish-version }}
+          python3 tools/publish_pages.py build/staging-maven --keep libmpv=12

@@ -75,3 +75,13 @@ movie entries do not automatically transfer to the new series entries.
 Validation: 1,256 core tests passed. The authorized portal check confirmed the
 show/season/episode/file hierarchy and returned a playable episode link. Video
 playback and the upgrade still need testing on the TV.
+
+## Version 1.0.2: native-Series endpoint rejection
+
+Fixes a reproduced Series import abort when the portal rejects native Series
+but still authorizes VOD. The importer verifies VOD again and uses its show
+categories, without pruning cached native series from an incomplete view.
+An unavailable native catalogue may still cause a source-sync warning.
+
+After updating, run a normal source sync. Do not delete the source or force
+a clean sync while Series remains empty. See the release notes for validation.

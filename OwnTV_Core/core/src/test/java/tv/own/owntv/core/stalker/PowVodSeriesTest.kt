@@ -5,6 +5,46 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PowVodSeriesTest {
+    @Test fun falseNativePayloadDoesNotBlockAuthorizedVodSeriesAndCannotPruneNativeCache() = runBlocking {
+        var vodReads = 0
+        val result = PowVodSeries.loadCategories(
+            fetchVod = { vodReads++; listOf(StalkerClient.Genre("20", "ENGLISH | TV SHOWS"), StalkerClient.Genre("134", "ENGLISH MOVIES | 4K")) },
+            fetchNative = { throw StalkerClient.StalkerAuthException("js:false") },
+        )
+        assertEquals(listOf("powtv-vod-series:20"), result.items.map { it.id })
+        assertEquals(2, vodReads)
+        assertFalse(result.complete)
+    }
+    @Test fun supportedNativeAndVodCategoriesBothRemainAvailable() = runBlocking {
+        val result = PowVodSeries.loadCategories(
+            fetchVod = { listOf(StalkerClient.Genre("20", "TV SHOWS")) },
+            fetchNative = { listOf(StalkerClient.Genre("20", "Native series")) },
+        )
+        assertEquals(listOf("20", "powtv-vod-series:20"), result.items.map { it.id })
+        assertTrue(result.complete)
+    }
+    @Test(expected = StalkerClient.StalkerAuthException::class) fun expiredSessionStillTriggersAuthenticationRetry() = runBlocking {
+        var reads = 0
+        PowVodSeries.loadCategories(
+            fetchVod = { if (++reads == 2) throw StalkerClient.StalkerAuthException("expired"); listOf(StalkerClient.Genre("20", "TV SHOWS")) },
+            fetchNative = { throw StalkerClient.StalkerAuthException("expired") },
+        )
+        Unit
+    }
+    @Test(expected = StalkerClient.StalkerHttpException::class) fun nativeRateLimitIsNotTreatedAsMissingSeries() = runBlocking {
+        PowVodSeries.loadCategories(
+            fetchVod = { listOf(StalkerClient.Genre("20", "TV SHOWS")) },
+            fetchNative = { throw StalkerClient.StalkerHttpException(429, "rate limited") },
+        )
+        Unit
+    }
+    @Test(expected = StalkerClient.StalkerAuthException::class) fun nativeFailureWithoutVodShowsIsNotAnEmptySuccess() = runBlocking {
+        PowVodSeries.loadCategories(
+            fetchVod = { listOf(StalkerClient.Genre("134", "MOVIES")) },
+            fetchNative = { throw StalkerClient.StalkerAuthException("js:false") },
+        )
+        Unit
+    }
     @Test fun separatesProviderTvCategoriesWithoutMatchingMovieCollections() {
         listOf("ENGLISH | TV SHOWS", "ENGLISH | K-DRAMAS", "Web Series", "SERIES", "Bangla Natok").forEach {
             assertTrue(it, PowVodSeries.isSeriesCategory(it))

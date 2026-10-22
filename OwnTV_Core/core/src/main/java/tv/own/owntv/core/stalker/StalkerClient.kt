@@ -203,14 +203,12 @@ open class StalkerClient(okHttpClient: OkHttpClient) {
         getAllVodCategories(apiBase, mac, token, userAgent).filterNot { PowVodSeries.isSeriesCategory(it.title) }
 
     /** `?type=series&action=get_categories` → series categories (same shape as genres). */
-    suspend fun getSeriesCategories(apiBase: String, mac: String, token: String, userAgent: String? = null): List<Genre> {
+    suspend fun getSeriesCategories(apiBase: String, mac: String, token: String, userAgent: String? = null): PowVodSeries.Categories {
         val url = "$apiBase?type=series&action=get_categories&JsHttpRequest=1-xml"
-        val native = try { request(url, mac, token, userAgent) { readGenreArray(it) } }
-            catch (e: StalkerHttpException) { if (e.code == 404) emptyList() else throw e }
-        val vod = getAllVodCategories(apiBase, mac, token, userAgent)
-            .filter { PowVodSeries.isSeriesCategory(it.title) }
-            .map { it.copy(id = PowVodSeries.PREFIX + it.id) }
-        return native + vod
+        return PowVodSeries.loadCategories(
+            fetchVod = { getAllVodCategories(apiBase, mac, token, userAgent) },
+            fetchNative = { request(url, mac, token, userAgent) { readGenreArray(it) } },
+        )
     }
 
     /**

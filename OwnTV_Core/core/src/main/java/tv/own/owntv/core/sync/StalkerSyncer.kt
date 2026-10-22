@@ -21,6 +21,7 @@ import tv.own.owntv.core.database.entity.SourceEntity
 import tv.own.owntv.core.model.MediaType
 import tv.own.owntv.core.parser.XtCategory
 import tv.own.owntv.core.stalker.StalkerAuthManager
+import tv.own.owntv.core.stalker.PowVodSeries
 import tv.own.owntv.core.stalker.StalkerClient
 import tv.own.owntv.core.stalker.StalkerCredentials
 import tv.own.owntv.core.stalker.StalkerSession
@@ -303,7 +304,7 @@ internal class StalkerSyncer(
             phase = SyncPhase.MOVIES, mediaType = MediaType.MOVIE,
             table = "movies", ftsTable = "movies_fts", countsKey = "movies",
             adapter = support.movieAdapter,
-            fetchCategories = { auth.withAuthRetry(creds) { client.getVodCategories(it.apiBase, creds.mac, it.token, creds.userAgent) } },
+            fetchCategories = { auth.withAuthRetry(creds) { PowVodSeries.Categories(client.getVodCategories(it.apiBase, creds.mac, it.token, creds.userAgent)) } },
             fetchPage = { catId, page -> auth.withAuthRetry(creds) { client.getVodPage(it.apiBase, creds.mac, it.token, creds.userAgent, catId, page) } },
             map = { item, catDbId, order ->
                 MovieEntity(
@@ -355,7 +356,7 @@ internal class StalkerSyncer(
         ftsTable: String,
         countsKey: String,
         adapter: ContentAdapter<T>,
-        fetchCategories: suspend (StalkerSession) -> List<StalkerClient.Genre>,
+        fetchCategories: suspend (StalkerSession) -> PowVodSeries.Categories,
         fetchPage: suspend (catId: String, page: Int) -> StalkerClient.Page<StalkerClient.VodItem>,
         map: (item: StalkerClient.VodItem, categoryDbId: Long?, order: Int) -> T,
     ) = coroutineScope {
@@ -369,8 +370,8 @@ internal class StalkerSyncer(
 
         val hashDeferred = if (!freshSource) support.asyncHashLoad(this, label, s.id) { adapter.loadHashes(s.id) } else null
 
-        val cats = auth.withAuthRetry(creds) { fetchCategories(it) }
-            .filter { it.id.isNotBlank() && it.id != "*" }
+        val categoryResult = auth.withAuthRetry(creds) { fetchCategories(it) }
+        val cats = categoryResult.items.filter { it.id.isNotBlank() && it.id != "*" }
         Log.i(TAG, "$label categories sourceId=${s.id} count=${cats.size}")
         val categories = support.refreshCategories(s, mediaType, cats.map { XtCategory(it.id, it.title) }, stats)
         val catMap = categories.idsByRemoteId
@@ -570,8 +571,9 @@ internal class StalkerSyncer(
                 }
             }
             // A degraded pass must not report a clean success — surface it as a sync warning.
-            if (pageFailures.get() > 0) {
-                stats.addWarning(SyncWarning(phase.name, kind = SyncWarningKind.PAGE_FAILURE, count = pageFailures.get()))
+            if (pageFailures.get() > 0 || !categoryResult.complete) {
+                stats.addWarning(SyncWarning(phase.name, kind = SyncWarningKind.PAGE_FAILURE,
+                    count = pageFailures.get() + if (categoryResult.complete) 0 else 1))
             }
             // A drain that ran to the end leaves nothing outstanding, so any plan written by an
             // earlier lazy setup is now stale — drop it, or the worker and the category priority would keep treating a
@@ -587,7 +589,7 @@ internal class StalkerSyncer(
                     }
                     Log.i(TAG, "$label delta-skip sourceId=${s.id} unchangedCategories=${skippedCatDbIds.size}")
                 }
-                if (pageFailures.get() == 0) {
+                if (pageFailures.get() == 0 && categoryResult.complete) {
                     support.pruneRemoteIds(label, s.id, remoteIds, stats, adapter.remoteIdsForSource, adapter.deleteByRemoteIds)
                     support.pruneCategories(s.id, mediaType, categories.seenRemoteIds, label, stats)
                 } else {

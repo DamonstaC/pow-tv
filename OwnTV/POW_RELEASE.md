@@ -60,3 +60,15 @@ transfer automatically to their new Series entries.
 The category rule is based on provider category names. Unlabelled or mixed-content
 categories may still need a provider-specific rule. Native Stalker series, live TV,
 M3U and Xtream retain their existing playback paths.
+
+## Version 1.0.2
+
+Fixes a reproduced portal response: VOD categories succeed while native Series
+returns js:false. The importer rechecks VOD authorization and imports its show
+categories instead of aborting. Native authentication failures without working
+VOD shows, rate limits and other network errors still propagate. A partial native
+view cannot delete cached series. A source-sync warning may report the unavailable
+native catalogue even while VOD-based shows import successfully.
+
+Update over the installed app and run a normal source sync first. Do not remove
+the source or force a clean sync while Series is still empty.

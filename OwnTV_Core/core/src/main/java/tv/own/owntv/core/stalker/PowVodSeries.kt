@@ -9,6 +9,29 @@ object PowVodSeries {
     private val categoryPattern = Regex("\\b(?:tv\\s*shows?|web\\s*series|series|k[\\s-]*dramas?|nat[ao]k)\\b", RegexOption.IGNORE_CASE)
     fun isSeriesCategory(title: String): Boolean = categoryPattern.containsMatchIn(title.trim())
     fun flag(value: String?): Boolean = value == "1" || value.equals("true", ignoreCase = true)
+    data class Categories(val items: List<StalkerClient.Genre>, val complete: Boolean = true)
+
+    internal suspend fun loadCategories(
+        fetchVod: suspend () -> List<StalkerClient.Genre>,
+        fetchNative: suspend () -> List<StalkerClient.Genre>,
+    ): Categories {
+        fun routed(rows: List<StalkerClient.Genre>) = rows.filter { isSeriesCategory(it.title) }
+            .map { it.copy(id = PREFIX + it.id) }
+        val vod = routed(fetchVod())
+        val native = try { fetchNative() } catch (error: Exception) {
+            val unavailable = error is StalkerClient.StalkerAuthException ||
+                (error is StalkerClient.StalkerHttpException && error.code == 404)
+            if (!unavailable || vod.isEmpty()) throw error
+            // A second successful VOD read proves this session is still authorized. A false
+            // native-series payload must not block the supported VOD-series catalogue.
+            val verified = routed(fetchVod())
+            if (verified.isEmpty()) throw error
+            // Do not prune any pre-existing native series from this incomplete view.
+            return Categories(verified, complete = false)
+        }
+        return Categories(native + vod)
+    }
+
     internal fun moviePage(page: StalkerClient.Page<StalkerClient.VodItem>, excluded: Set<String>): StalkerClient.Page<StalkerClient.VodItem> {
         if (excluded.isEmpty()) return page
         val movies = page.items.filterNot { it.categoryId in excluded }

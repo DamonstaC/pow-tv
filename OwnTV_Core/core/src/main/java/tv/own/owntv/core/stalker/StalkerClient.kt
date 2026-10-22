@@ -194,15 +194,23 @@ open class StalkerClient(okHttpClient: OkHttpClient) {
     }
 
     /** `?type=vod&action=get_categories` → movie categories (same `[{id,title}]` shape as genres). */
-    suspend fun getVodCategories(apiBase: String, mac: String, token: String, userAgent: String? = null): List<Genre> {
+    private suspend fun getAllVodCategories(apiBase: String, mac: String, token: String, userAgent: String? = null): List<Genre> {
         val url = "$apiBase?type=vod&action=get_categories&JsHttpRequest=1-xml"
         return request(url, mac, token, userAgent) { readGenreArray(it) }
     }
 
+    suspend fun getVodCategories(apiBase: String, mac: String, token: String, userAgent: String? = null): List<Genre> =
+        getAllVodCategories(apiBase, mac, token, userAgent).filterNot { PowVodSeries.isSeriesCategory(it.title) }
+
     /** `?type=series&action=get_categories` → series categories (same shape as genres). */
     suspend fun getSeriesCategories(apiBase: String, mac: String, token: String, userAgent: String? = null): List<Genre> {
         val url = "$apiBase?type=series&action=get_categories&JsHttpRequest=1-xml"
-        return request(url, mac, token, userAgent) { readGenreArray(it) }
+        val native = try { request(url, mac, token, userAgent) { readGenreArray(it) } }
+            catch (e: StalkerHttpException) { if (e.code == 404) emptyList() else throw e }
+        val vod = getAllVodCategories(apiBase, mac, token, userAgent)
+            .filter { PowVodSeries.isSeriesCategory(it.title) }
+            .map { it.copy(id = PowVodSeries.PREFIX + it.id) }
+        return native + vod
     }
 
     /**
@@ -401,9 +409,13 @@ open class StalkerClient(okHttpClient: OkHttpClient) {
     suspend fun getVodPage(
         apiBase: String, mac: String, token: String, userAgent: String?, categoryId: String, page: Int,
     ): Page<VodItem> {
+        // Exclude routed show categories even when the portal returns its entire VOD catalogue.
+        val excluded = if (categoryId == "*") getAllVodCategories(apiBase, mac, token, userAgent)
+            .filter { PowVodSeries.isSeriesCategory(it.title) }.map { it.id }.toSet() else emptySet()
         val url = "$apiBase?type=vod&action=get_ordered_list&category=${enc(categoryId)}&sortby=added&p=$page&JsHttpRequest=1-xml"
         return request(url, mac, token, userAgent) { readVodPage(it) }.let { page ->
-            page.copy(items = page.items.map { it.copy(poster = resolveArtwork(apiBase, it.poster)) })
+            val movies = PowVodSeries.moviePage(page, excluded)
+            movies.copy(items = movies.items.map { it.copy(poster = resolveArtwork(apiBase, it.poster)) })
         }
     }
 
@@ -411,9 +423,20 @@ open class StalkerClient(okHttpClient: OkHttpClient) {
     suspend fun getSeriesPage(
         apiBase: String, mac: String, token: String, userAgent: String?, categoryId: String, page: Int,
     ): Page<VodItem> {
-        val url = "$apiBase?type=series&action=get_ordered_list&category=${enc(categoryId)}&sortby=added&p=$page&JsHttpRequest=1-xml"
+        // A native-series bulk response cannot include the separately routed VOD shows.
+        if (categoryId == "*" && getAllVodCategories(apiBase, mac, token, userAgent).any { PowVodSeries.isSeriesCategory(it.title) }) {
+            return Page(0, 0, emptyList())
+        }
+        val vod = categoryId.startsWith(PowVodSeries.PREFIX)
+        val kind = if (vod) "vod" else "series"
+        val category = categoryId.removePrefix(PowVodSeries.PREFIX)
+        val url = "$apiBase?type=$kind&action=get_ordered_list&category=${enc(category)}&sortby=added&p=$page&JsHttpRequest=1-xml"
         return request(url, mac, token, userAgent) { readVodPage(it) }.let { page ->
-            page.copy(items = page.items.map { it.copy(poster = resolveArtwork(apiBase, it.poster)) })
+            page.copy(items = page.items.map { it.copy(
+                id = if (vod) PowVodSeries.PREFIX + it.id else it.id,
+                categoryId = if (vod) PowVodSeries.PREFIX + category else it.categoryId,
+                poster = resolveArtwork(apiBase, it.poster),
+            ) })
         }
     }
 
@@ -428,6 +451,59 @@ open class StalkerClient(okHttpClient: OkHttpClient) {
         val cat = categoryId?.takeIf { it.isNotBlank() }?.let { "&category=${enc(it)}" } ?: ""
         val url = "$apiBase?type=series&action=get_ordered_list$cat&movie_id=${enc(movieId)}&p=$page&JsHttpRequest=1-xml"
         return request(url, mac, token, userAgent) { readSeasonPage(it) }
+    }
+
+    data class VodSeriesEpisode(val id: String, val number: Int, val name: String)
+
+    suspend fun getVodSeriesSeasons(apiBase: String, mac: String, token: String, userAgent: String?, movieId: String, page: Int): Page<SeasonItem> {
+        val url = "$apiBase?type=vod&action=get_ordered_list&movie_id=${enc(movieId)}&p=$page&JsHttpRequest=1-xml"
+        val rows = request(url, mac, token, userAgent) { readHierarchyPage(it) }
+        return Page(rows.totalItems, rows.maxPageItems, rows.items.map(PowVodSeries::season))
+    }
+
+    suspend fun getVodSeriesEpisodes(apiBase: String, mac: String, token: String, userAgent: String?, movieId: String, seasonId: String, page: Int): Page<VodSeriesEpisode> {
+        val url = "$apiBase?type=vod&action=get_ordered_list&movie_id=${enc(movieId)}&season_id=${enc(seasonId)}&p=$page&JsHttpRequest=1-xml"
+        val rows = request(url, mac, token, userAgent) { readHierarchyPage(it) }
+        return Page(rows.totalItems, rows.maxPageItems, rows.items.map(PowVodSeries::episode))
+    }
+
+    open suspend fun resolveVodEpisodeCommand(apiBase: String, mac: String, token: String, userAgent: String?, locator: PowVodSeries.EpisodeLocator): String {
+        val url = "$apiBase?type=vod&action=get_ordered_list&movie_id=${enc(locator.movieId)}&season_id=${enc(locator.seasonId)}&episode_id=${enc(locator.episodeId)}&p=1&JsHttpRequest=1-xml"
+        val rows = request(url, mac, token, userAgent) { readHierarchyPage(it) }.items
+        val file = rows.firstOrNull { PowVodSeries.flag(it["is_file"]) } ?: rows.firstOrNull()
+        val id = requireNotNull(file?.get("id"))
+        require(id.matches(Regex("[0-9]+")))
+        return "/media/file_${id}.mpg"
+    }
+
+    // Reject malformed pages instead of treating them as an authoritative empty season.
+    private fun readHierarchyPage(reader: JsonReader): Page<Map<String, String>> {
+        require(reader.peek() == JsonToken.BEGIN_OBJECT)
+        var total = 0
+        var maxPer = 0
+        var dataSeen = false
+        val rows = ArrayList<Map<String, String>>()
+        reader.beginObject()
+        while (reader.hasNext()) {
+            when (reader.nextName()) {
+                "total_items" -> total = nextIntLenient(reader) ?: 0
+                "max_page_items" -> maxPer = nextIntLenient(reader) ?: 0
+                "data" -> {
+                    require(reader.peek() == JsonToken.BEGIN_ARRAY)
+                    dataSeen = true
+                    reader.beginArray()
+                    while (reader.hasNext()) {
+                        require(reader.peek() == JsonToken.BEGIN_OBJECT)
+                        rows.add(readScalarFields(reader))
+                    }
+                    reader.endArray()
+                }
+                else -> reader.skipValue()
+            }
+        }
+        reader.endObject()
+        require(dataSeen)
+        return Page(total.coerceAtLeast(rows.size), maxPer, rows)
     }
 
     private fun readSeasonPage(reader: JsonReader): Page<SeasonItem> {

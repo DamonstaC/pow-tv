@@ -12,6 +12,7 @@ import tv.own.owntv.core.model.SourceType
 import tv.own.owntv.core.network.HttpClient
 import tv.own.owntv.core.parser.XtreamClient
 import tv.own.owntv.core.stalker.StalkerAuthManager
+import tv.own.owntv.core.stalker.PowVodSeries
 import tv.own.owntv.core.stalker.StalkerClient
 import tv.own.owntv.core.stalker.StalkerCredentials
 import tv.own.owntv.core.stalker.stalkerCredentials
@@ -143,6 +144,9 @@ class SeriesRepository(
     private suspend fun fetchStalkerEpisodes(series: SeriesEntity, source: SourceEntity, remoteId: String): List<EpisodeEntity>? {
         val mac = source.mac?.let { StalkerClient.canonicalizeMac(it) } ?: return null
         val creds = source.stalkerCredentials(mac)
+        if (remoteId.startsWith(PowVodSeries.PREFIX)) {
+            return fetchVodSeriesEpisodes(series, creds, remoteId.removePrefix(PowVodSeries.PREFIX))
+        }
         val seasons = ArrayList<StalkerClient.SeasonItem>()
         var page = 1
         while (page <= MAX_SEASON_PAGES) {
@@ -184,6 +188,32 @@ class SeriesRepository(
             "stalker episodes seriesId=${series.id} remoteId=$remoteId seasons=${seasons.size} episodes=${episodes.size}",
         )
         return episodes
+    }
+
+    private suspend fun fetchVodSeriesEpisodes(series: SeriesEntity, creds: StalkerCredentials, movieId: String): List<EpisodeEntity> {
+        val seasons = PowVodSeries.collectPages { page ->
+            stalkerAuth.withAuthRetry(creds) { session ->
+                stalkerClient.getVodSeriesSeasons(session.apiBase, creds.mac, session.token, creds.userAgent, movieId, page)
+            }
+        }
+        val result = ArrayList<EpisodeEntity>()
+        seasons.distinctBy { it.id }.forEachIndexed { index, season ->
+            val episodes = PowVodSeries.collectPages { page ->
+                stalkerAuth.withAuthRetry(creds) { session ->
+                    stalkerClient.getVodSeriesEpisodes(session.apiBase, creds.mac, session.token, creds.userAgent, movieId, season.id, page)
+                }
+            }
+            episodes.distinctBy { it.id }.forEach { ep ->
+                result.add(EpisodeEntity(
+                    seriesId = series.id, seasonId = null,
+                    seasonNumber = season.seasonNumber ?: (index + 1), episodeNumber = ep.number,
+                    name = ep.name,
+                    streamUrl = PowVodSeries.EpisodeLocator(movieId, season.id, ep.id).command(),
+                    containerExt = null, remoteId = "${season.id}:${ep.id}",
+                ))
+            }
+        }
+        return result
     }
 
     private companion object {

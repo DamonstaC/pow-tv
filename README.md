@@ -60,3 +60,18 @@ apps when Android asks, then open POW TV and add your own provider details.
 No provider account or subscription is bundled. Test this build before sharing
 it with customers. Future updates appear under About > Check updates and require
 confirmation on the TV.
+
+## Version 1.0.1: Stalker series correction
+
+VOD-based TV Shows, Series and K-Drama categories now appear under Series.
+The app loads their seasons and episodes and looks up the playable episode file
+on every play/reconnect. Standard series and movie playback remain separate.
+
+After updating, re-sync your Stalker source with both Movies and Series enabled.
+If a catalogue-shrink warning leaves old movie entries, use Force clean sync only
+after the new Series catalogue has loaded. Favourites on the old misclassified
+movie entries do not automatically transfer to the new series entries.
+
+Validation: 1,256 core tests passed. The authorized portal check confirmed the
+show/season/episode/file hierarchy and returned a playable episode link. Video
+playback and the upgrade still need testing on the TV.

@@ -31,6 +31,24 @@ class StreamUrlResolverTest {
         assertEquals("vod", client.lastType)
     }
 
+    @Test fun vodEpisodeResolvesFileFreshWithoutNativeSeriesParameter() = runBlocking {
+        var lookups = 0
+        val locator = PowVodSeries.EpisodeLocator("10", "20", "30")
+        val client = object : RecordingClient() {
+            override suspend fun resolveVodEpisodeCommand(apiBase: String, mac: String, token: String, userAgent: String?, locator: PowVodSeries.EpisodeLocator): String {
+                assertEquals(PowVodSeries.EpisodeLocator("10", "20", "30"), locator)
+                lookups++
+                return "/media/file_99.mpg"
+            }
+        }
+        val resolver = resolver(client = client)
+        repeat(2) { resolver.resolve(stalkerSource(""), locator.command(), vod = true, episode = 3) }
+        assertEquals(2, lookups)
+        assertEquals("/media/file_99.mpg", client.lastCmd)
+        assertEquals("vod", client.lastType)
+        assertNull(client.lastEpisode)
+    }
+
     private val m3uSource = SourceEntity(name = "m3u", type = SourceType.M3U, url = "http://h/p.m3u")
     private val xtreamSource = SourceEntity(name = "xt", type = SourceType.XTREAM, url = "http://h", username = "u", password = "p")
     private fun stalkerSource(cmd: String, mac: String = "00:1A:79:AA:BB:CC") =

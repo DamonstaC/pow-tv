@@ -42,14 +42,17 @@ class StreamUrlResolver(
         val mac = source.mac?.let { StalkerClient.canonicalizeMac(it) } ?: return direct
         val creds = source.stalkerCredentials(mac)
         return stalkerAuth.withAuthRetry(creds) { session ->
+            val vodEpisode = if (vod) PowVodSeries.episodeLocator(storedUrl) else null
             val movieId = storedUrl.takeIf { vod && episode == null && it.startsWith(StalkerClient.MOVIE_FILE_PREFIX) }
                 ?.removePrefix(StalkerClient.MOVIE_FILE_PREFIX)
-            val command = if (movieId != null) {
+            val command = if (vodEpisode != null) {
+                stalkerClient.resolveVodEpisodeCommand(session.apiBase, mac, session.token, creds.userAgent, vodEpisode)
+            } else if (movieId != null) {
                 stalkerClient.resolveMovieFileCommand(session.apiBase, mac, session.token, creds.userAgent, movieId)
             } else storedUrl
             stalkerClient.createLink(
                 session.apiBase, mac, session.token, creds.userAgent, command,
-                type = if (vod) "vod" else "itv", episode = episode,
+                type = if (vod) "vod" else "itv", episode = if (vodEpisode != null) null else episode,
             )
         }
     }

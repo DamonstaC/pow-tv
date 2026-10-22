@@ -3,6 +3,7 @@
 POW TV is a modified OwnTV 5.2.1 distribution, maintained separately by DamonstaC.
 Modifications dated 2026-10-22: POW branding, separate application ID, POW update feed,
 relative Stalker artwork URLs and file-backed Stalker movie playback.
+Version 1.0.1 adds VOD-series category routing, paged seasons/episodes and fresh episode-file resolution.
 
 The upstream GPLv3 licenses and copyright notices remain in both source repositories.
 Distribute the complete matching app and core source, including build scripts and
@@ -44,3 +45,18 @@ saved sources and favourites survive. Do not embed subscription credentials in r
 
 This initial build is for TV acceptance testing. A successful build and unit tests
 are not proof of video playback, remote-control usability or upgrade installation on a TV.
+
+## Updating from 1.0.0 to 1.0.1
+
+Install the update over POW TV, then re-sync the Stalker source with Movies and
+Series enabled. The new catalogue separates categories named TV Shows, Series,
+K-Dramas and Natok, following the existing IPTVnator compatibility logic.
+VOD-based shows use separate provider IDs, so they do not collide with native series.
+If a catalogue-shrink warning leaves old movie entries, use Force clean sync after
+confirming the new Series catalogue loaded successfully. This removes obsolete
+catalogue entries; favourites on those formerly misclassified movie entries do not
+transfer automatically to their new Series entries.
+
+The category rule is based on provider category names. Unlabelled or mixed-content
+categories may still need a provider-specific rule. Native Stalker series, live TV,
+M3U and Xtream retain their existing playback paths.
